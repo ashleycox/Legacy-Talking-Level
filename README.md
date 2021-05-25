@@ -9,3 +9,4 @@ This project was created out of my own need for a talking spirit level. The talk
 
 You can view more information along with build instructions and a detailed software change-log at [My Website](https://ashleycox.co.uk/projects/talking-spirit-level/)
 
+This code relies on the [talkie-fix](https://github.com/norberthidas/Talkie-FIX), [MPU6050_light](https://github.com/rfetick/MPU6050_light) and [oneButton](https://github.com/mathertel/OneButton) libraries. 
