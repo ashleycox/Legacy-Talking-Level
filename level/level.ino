@@ -5,18 +5,21 @@
   Permission is granted for the code within to be used for non commercial purposes. Please contact for commercial usage rights.
   More details on this project at https://ashleycox.co.uk
 **/
-#include <OneButton.h> //Handles the button
+
+//Include libraries
+#include <EEPROM.h> //saves settings to EEPROM
+#include <OneButton.h> //Handles the menu button
 #include <talkie.h> //The Talkie TTS library
 #include <Wire.h> // I2C communication library
 
 const int MPU = 0x68; // I2C address of the MPU6050 accelerometer
 OneButton button(2, true); // instantiation of a OneButton object
-int r1, r2, r3, pt = 2; //we use these to speak the reading to required decimal places
-int menuOption; //Used to navigate the menu
+int r1, r2, r3, pt; //we use these to speak the reading to required decimal places
+int menuOption, EEAddress = 0; //Used to navigate the menu and hold current EEPROM register address
 int count = 0, avgReading = 30; //counter for average reading
 int16_t AcX, AcY, AcZ; //variables to hold raw readings for x, y and z axes.
-float xPrev, yAngle, xAngle, zAngle, xZero = 0, yZero = 0, zZero = 0; //holds calculated angle readings and zero values
-bool readX = true, readY = false, readZ = false, xInit = true, menu = false, read = true; //Which measurements to announce and some other boolean variables
+float yAngle, xAngle, zAngle, xZero = 0, yZero = 0, zZero = 0; //holds calculated angle readings and zero values
+bool ROM = false, readX, readY, readZ, menu = false, read = true; //Which measurements to announce and some other boolean variables
 
 //Speech variables
 //words
@@ -58,9 +61,27 @@ const uint8_t spTHOUSAND[] PROGMEM = {0x0C, 0xE8, 0x2E, 0xD4, 0x02, 0x06, 0x98, 
 Talkie voice; //Initialise Talkie
 
 void setup() {
-  Serial.begin(9400);
+  //Serial.begin(9400);
 
-
+  if (!EEPROM.get(EEAddress, ROM)) {
+    //No settings have been written to the EEPROM yet
+    //Set some default values
+    readX = true;
+    readY = false;
+    readZ = false;
+    pt = 2;
+  } else {
+    //There are settings stored in ROM
+    ROM = true;
+    EEAddress += sizeof(ROM);
+    readX = EEPROM.get(EEAddress, readX);
+    EEAddress += sizeof(readX);
+    readY = EEPROM.get(EEAddress, readY);
+    EEAddress += sizeof(readY);
+    readZ = EEPROM.get(EEAddress, readZ);
+    EEAddress += sizeof(readZ);
+    pt = EEPROM.get(EEAddress, pt);
+  }
 
   // Initialize interface to the MPU6050
   Wire.begin();
@@ -106,16 +127,6 @@ void loop() {
       xAngle = xAngle / avgReading;
       yAngle = yAngle / avgReading;
       zAngle = zAngle / avgReading;
-if(xPrev == xAngle && readX) {
-  readX = false;
-} else {
-xPrev = xAngle;
-readX = true;
-}
-
- 
-
-
 
       //Uncomment these lines to print the output to the serial monitor
       //Serial.print("Pitch: ");
@@ -246,7 +257,7 @@ void speakNum(int n) {
   }
 }
 
-//Handles togglingof menu items
+//Handles toggling of menu items
 void buttonClick() {
   if (menu) {
     menuOption = menuOption + 1;
@@ -291,7 +302,6 @@ void buttonClick() {
           speakNum(pt);
           read = false;
         }
-
         break;
       case 5:
         if (read) {
@@ -318,6 +328,7 @@ void buttonClick() {
         if (read) {
           voice.say(spSET);
           voice.say(spX);
+          transNum(xAngle);
           read = false;
         }
         break;
@@ -325,6 +336,7 @@ void buttonClick() {
         if (read) {
           voice.say(spSET);
           voice.say(spY);
+          transNum(yAngle);
           read = false;
         }
         break;
@@ -332,6 +344,7 @@ void buttonClick() {
         if (read) {
           voice.say(spSET);
           voice.say(spZ);
+          transNum(zAngle);
           read = false;
         }
         break;
@@ -349,6 +362,7 @@ void buttonDoubleClick() {
   if (menu) {
     switch (menuOption) {
       case 1:
+        EEAddress = 0 + sizeof(ROM); // we need to work out the EEPROM address to store the updated value
         if (readX) {
           readX = false;
           voice.say(spX);
@@ -358,8 +372,10 @@ void buttonDoubleClick() {
           voice.say(spX);
           voice.say(spON);
         }
+        EEPROM.put(EEAddress, readX); //Store the updated value in theEEPROM. The value is only updated if it changes
         break;
       case 2:
+        EEAddress = 0 + sizeof(ROM) + sizeof(readX); // we need to work out the EEPROM address to store the updated value
         if (readY) {
           readY = false;
           voice.say(spY);
@@ -369,8 +385,10 @@ void buttonDoubleClick() {
           voice.say(spY);
           voice.say(spON);
         }
+        EEPROM.put(EEAddress, readY); //Store the updated value in theEEPROM. The value is only updated if it changes
         break;
       case 3:
+        EEAddress = 0 + sizeof(ROM) + sizeof(readX) + sizeof(readY); // we need to work out the EEPROM address to store the updated value
         if (readZ) {
           readZ = false;
           voice.say(spZ);
@@ -380,14 +398,17 @@ void buttonDoubleClick() {
           voice.say(spZ);
           voice.say(spON);
         }
+        EEPROM.put(EEAddress, readZ); //Store the updated value in theEEPROM. The value is only updated if it changes
         break;
       case 4:
+        EEAddress = 0 + sizeof(ROM) + sizeof(readX) + sizeof(readY) + sizeof(readZ); // we need to work out the EEPROM address to store the updated value
         if (pt < 3) {
           pt = pt + 1;
         } else {
           pt = 1;
         }
         speakNum(pt);
+        EEPROM.put(EEAddress, pt); //Store the updated value in theEEPROM. The value is only updated if it changes
         break;
       case 5:
         xZero = 0;
@@ -402,21 +423,22 @@ void buttonDoubleClick() {
         voice.say(spZERO);
         break;
       case 8:
-        xZero = xPrev;
+        xZero = xAngle;
         voice.say(spX);
-        voice.say(spZERO);
         voice.say(spMINUS);
-        transNum(xPrev);
+        transNum(xAngle);
         break;
       case 9:
-        voice.say(spX);
-        voice.say(spZERO);
+        yZero = yAngle;
+        voice.say(spY);
         voice.say(spMINUS);
+        transNum(yAngle);
         break;
       case 10:
-        voice.say(spX);
-        voice.say(spZERO);
+        zZero = zAngle;
+        voice.say(spZ);
         voice.say(spMINUS);
+        transNum(zAngle);
         break;
     }
   }
