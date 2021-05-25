@@ -1,6 +1,6 @@
 /**
   Arduino Talking Level
-  A talking angle level using the MPU6050 three-axis accelerometer and the Talkie library.
+  A talking angle level using the MPU6050 three-axis accelerometer.
   Concept and code by Ashley Cox, with libraries the property of their respective owners and distributed in accordance with their respective licenses
   Permission is granted for the code within to be used for non commercial purposes. Please contact for commercial usage rights.
   More details on this project at https://ashleycox.co.uk
@@ -9,17 +9,13 @@
 //Include libraries
 #include <EEPROM.h> //saves settings to EEPROM
 #include <OneButton.h> //Handles the menu button
-#include <talkie.h> //The Talkie TTS library
 #include <Wire.h> // I2C communication library
+#include <MPU6050_light.h> //handles communication with the MPU6050
+#include <talkie.h> //The Talkie text to speech library
 
-const int MPU = 0x68; // I2C address of the MPU6050 accelerometer
-OneButton button(2, true); // instantiation of a OneButton object
-int r1, r2, r3, pt; //we use these to speak the reading to required decimal places
-int menuOption, EEAddress = 0; //Used to navigate the menu and hold current EEPROM register address
-int count = 0, avgReading = 30; //counter for average reading
-int16_t AcX, AcY, AcZ; //variables to hold raw readings for x, y and z axes.
-float yAngle, xAngle, zAngle, xZero = 0, yZero = 0, zZero = 0; //holds calculated angle readings and zero values
-bool ROM = false, readX, readY, readZ, menu = false, read = true; //Which measurements to announce and some other boolean variables
+
+OneButton button(2, true); // instantiate a OneButton object
+MPU6050 mpu(Wire); //Initialise the MPU6050 library
 
 //Speech variables
 //words
@@ -60,91 +56,105 @@ const uint8_t spHUNDRED[]  PROGMEM = {0x04, 0xC8, 0x7E, 0x5C, 0x02, 0x0A, 0xA8, 
 const uint8_t spTHOUSAND[] PROGMEM = {0x0C, 0xE8, 0x2E, 0xD4, 0x02, 0x06, 0x98, 0xD2, 0x55, 0x03, 0x16, 0x68, 0x7D, 0x17, 0xE9, 0x6E, 0xBC, 0x65, 0x8C, 0x45, 0x6D, 0xA6, 0xE9, 0x96, 0xDD, 0xDE, 0xF6, 0xB6, 0xB7, 0x5E, 0x75, 0xD4, 0x93, 0xA5, 0x9C, 0x7B, 0x57, 0xB3, 0x6E, 0x7D, 0x12, 0x19, 0xAD, 0xDC, 0x29, 0x8D, 0x4F, 0x93, 0xB4, 0x87, 0xD2, 0xB6, 0xFC, 0xDD, 0xAC, 0x22, 0x56, 0x02, 0x70, 0x18, 0xCA, 0x18, 0x26, 0xB5, 0x90, 0xD4, 0xDE, 0x6B, 0x29, 0xDA, 0x2D, 0x25, 0x17, 0x8D, 0x79, 0x88, 0xD4, 0x48, 0x79, 0x5D, 0xF7, 0x74, 0x75, 0xA1, 0x94, 0xA9, 0xD1, 0xF2, 0xED, 0x9E, 0xAA, 0x51, 0xA6, 0xD4, 0x9E, 0x7F, 0xED, 0x6F, 0xFE, 0x2B, 0xD1, 0xC7, 0x3D, 0x89, 0xFA, 0xB7, 0x0D, 0x57, 0xD3, 0xB4, 0xF5, 0x37, 0x55, 0x37, 0x2E, 0xE6, 0xB2, 0xD7, 0x57, 0xFF, 0x0F}; //Initialise Talkie
 Talkie voice; //Initialise Talkie
 
+//Defining variables
+int pt; //we use this to speak the reading to required decimal places
+int menuOption, EEAddress = 0; //Used to navigate the menu and hold current EEPROM register address
+int count = 0, avgReading = 50; //counter for average reading
+int AcX, AcY, AcZ; //variables to hold readings for x, y and z axes.
+float yAngle, xAngle, zAngle, xZero = 0, yZero = 0, zZero = 0; //holds calculated angle readings and tare values
+bool ROM = false, readX, readY, readZ, menu = false, read = true; //Is the EEPROM populated, Which measurements to announce, are we in themenu, and shouldwe read the menu value
+
 void setup() {
-  //Serial.begin(9400);
+  //Ready the serial monitor
+  Serial.begin(9400);
 
   if (!EEPROM.get(EEAddress, ROM)) {
     //No settings have been written to the EEPROM yet
     //Set some default values
-    readX = true;
-    readY = false;
-    readZ = false;
-    pt = 2;
+    readX = true; //By default the x (pitch) angle is spoken
+    readY = false; //By default the y (roll) angle is not spoken
+    readZ = false; //By default the Z (yaw) angle is also not spoken
+    pt = 2; //By default we speak the reading to 1 decimal place
   } else {
     //There are settings stored in ROM
     ROM = true;
-    EEAddress += sizeof(ROM);
-    readX = EEPROM.get(EEAddress, readX);
-    EEAddress += sizeof(readX);
+    EEAddress += sizeof(ROM); //The first area of the EEPROM
+    readX = EEPROM.get(EEAddress, readX); //Determines from teh EEPROM if we shoudl speak the X (pitch) angle
+    EEAddress += sizeof(readX); //Increment teh address to access in ROM by the size of the x variable
     readY = EEPROM.get(EEAddress, readY);
     EEAddress += sizeof(readY);
     readZ = EEPROM.get(EEAddress, readZ);
     EEAddress += sizeof(readZ);
     pt = EEPROM.get(EEAddress, pt);
-  }
-
-  // Initialize interface to the MPU6050
-  Wire.begin();
-  Wire.beginTransmission(MPU);
-  Wire.write(0x6B);
-  Wire.write(0);
-  Wire.endTransmission(true);
+  } //End if
 
   button.attachClick(buttonClick); //toggles between menu items
-  button.attachDoubleClick(buttonDoubleClick); //changes a menu item
+  button.attachDoubleClick(buttonDoubleClick); //changes a menu item value
   button.attachLongPressStart(buttonPress); //enters and exits the menu
   button.setClickTicks(300); //the minimum delay to count a click
   button.setPressTicks(1000); //the minimum duration of a long press
   delay(100);
-}
+  
+  Wire.begin();
+  byte status = mpu.begin();
+  Serial.print(F("MPU6050 status: "));
+  Serial.println(status);
+  while (status != 0) {
+    Serial.println("Can't connect to MPU6050");
+    voice.say(spERROR);
+  } //End while
+
+  Serial.println(F("Calculating offsets, do not move MPU6050"));
+  delay(1000);
+  mpu.calcOffsets(); // gyro and accelerometer
+  Serial.println("Done!\n");
+} //End setup
 
 void loop() {
   //we monitor the button on each loop
   button.tick();
   if (!menu) {
     //we're not in the menu system so continue as normal
-    // Read the acceleromteter data
-    Wire.beginTransmission(MPU);
-    Wire.write(0x3B); // Start with register 0x3B (ACCEL_XOUT_H)
-    Wire.endTransmission(false);
-    Wire.requestFrom(MPU, 6, true); // Read 6 registers total, each axis value is stored in 2 registers
-    AcX = Wire.read() << 8 | Wire.read(); // X-axis value
-    AcY = Wire.read() << 8 | Wire.read(); // Y-axis value
-    AcZ = Wire.read() << 8 | Wire.read(); // Z-axis value
 
     //Take a number of readings so we can calculate an average
-    if (count < avgReading) {
-      //each time we increment the counter, we add up the measurements.
+    for (int count = 0; count < avgReading; count ++) {
+      // Read the acceleromteter data
+      mpu.update();
+
+      //drop the readings into the respective variables. Not strictly necessary, but makes the code more consistent
+      AcX = mpu.getAngleX();
+      AcY = mpu.getAngleY();
+      AcZ = mpu.getAngleZ();
+
+      //each time we increment the counter, we add up the measurements subtracting the tare value if one is set
       // Calculating the Roll angle (rotation around X-axis)
-      xAngle = xAngle + atan(-1 * AcY / sqrt(pow(AcX, 2) + pow(AcZ, 2))) * 180 / PI - xZero;
+      xAngle = xAngle + AcX - xZero;
       // Calculating the Pitch angle (rotation around Y-axis)
-      yAngle = yAngle + atan(-1 * AcX / sqrt(pow(AcY, 2) + pow(AcZ, 2))) * 180 / PI - yZero;
+      yAngle = yAngle + AcY - yZero;
       // Calculating the yaw angle (rotation around Z-axis)
-      zAngle = zAngle + atan(-1 * AcZ / sqrt(pow(AcX, 2) + pow(AcY, 2))) * 180 / PI - zZero;
-      count = count + 1; //Increment the counter
-    } else {
-      //We need to divide our measurements by the number of readings toget an average
-      xAngle = xAngle / avgReading;
-      yAngle = yAngle / avgReading;
-      zAngle = zAngle / avgReading;
+      zAngle = zAngle + AcZ - zZero;
+    } //end for loop
 
-      //Uncomment these lines to print the output to the serial monitor
-      //Serial.print("Pitch: ");
-      //Serial.println(yAngle);
-      //Serial.print("Roll: ");
-      //Serial.println(xAngle);
-      //Serial.print("Yaw");
-      //Serial.println(zAngle);
+    //We need to divide our measurements by the number of readings toget an average
+    xAngle = xAngle / avgReading;
+    yAngle = yAngle / avgReading;
+    zAngle = zAngle / avgReading;
 
+    //print the output to the serial monitor
+    Serial.print("Pitch: ");
+    Serial.println(yAngle);
+    Serial.print("Roll: ");
+    Serial.println(xAngle);
+    Serial.print("Yaw");
+    Serial.println(zAngle);
       //Speak the readings, if enabled
       if (readX) {
         //if reading of Y and Z values is disabled, there's no need to speak the letter X
         if (readY or readZ) {
           voice.say(spX);
-        } //end if
+        }        //end if
         transNum(xAngle);
       } //end if
-
       if (readY) {
         //if reading of X and Z values is disabled, there's no need to speak the letter Y
         if (readX or readZ) {
@@ -152,7 +162,6 @@ void loop() {
         } //end if
         transNum(yAngle);
       } //end if
-
       if (readZ) {
         //if reading of X and Y values is disabled, there's no need to speak the letter Z
         if (readX or readY) {
@@ -160,14 +169,13 @@ void loop() {
         } //end if
         transNum(zAngle);
       } //end if
-
-      count = 0; //reset the counter
-    } //end if
+count = 0;
   } //end if Menu
 } //end loop
 
 //Convert number to 2 decimal places to be read
 void transNum(float n) {
+  int r1, r2, r3;
   //We break the reading up to speak it properly
   //R1 is defined as an integer, therefore we lose the decimal
   r1 = n;
